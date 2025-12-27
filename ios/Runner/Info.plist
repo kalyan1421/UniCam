@@ -45,14 +45,24 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
-	<!-- Network permissions for ONVIF discovery and RTSP streaming -->
+	
+	<!-- Local Network Permission - Required for ONVIF discovery -->
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>CCTV Open needs local network access to discover and connect to IP cameras on your network.</string>
+	<string>We need to access your local network to find and connect to your security cameras.</string>
+	
+	<!-- Bonjour Services for ONVIF discovery -->
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_onvif._tcp</string>
 	</array>
-	<!-- Allow cleartext traffic for RTSP -->
+	
+	<!-- Location Permission - May be required for WiFi info on some iOS versions -->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Location access may be needed to identify your WiFi network for camera discovery.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Location access may be needed to identify your WiFi network for camera discovery.</string>
+	
+	<!-- Allow cleartext traffic for RTSP streams -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
