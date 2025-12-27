@@ -151,14 +151,46 @@ class HomeScreen extends StatelessWidget {
   void _showCredentialsDialog(BuildContext context, CameraDevice camera) {
     showDialog(
       context: context,
-      builder: (context) => CredentialsDialog(
+      barrierDismissible: false,
+      builder: (dialogContext) => CredentialsDialog(
         camera: camera,
-        onSave: (username, password) {
-          context.read<CameraProvider>().addDiscoveredCamera(
+        onSave: (username, password) async {
+          // Show loading indicator
+          showDialog(
+            context: dialogContext,
+            barrierDismissible: false,
+            builder: (context) => const Center(
+              child: Card(
+                color: Color(0xFF141A22),
+                child: Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      CircularProgressIndicator(color: Color(0xFF00E5FF)),
+                      SizedBox(height: 16),
+                      Text(
+                        'Fetching stream info...',
+                        style: TextStyle(color: Colors.white),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          );
+          
+          // Add camera (this now fetches RTSP URL via ONVIF)
+          await context.read<CameraProvider>().addDiscoveredCamera(
             camera,
             username: username,
             password: password,
           );
+          
+          // Close loading dialog
+          if (dialogContext.mounted) {
+            Navigator.of(dialogContext).pop();
+          }
         },
       ),
     );

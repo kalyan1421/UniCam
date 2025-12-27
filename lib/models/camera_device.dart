@@ -10,6 +10,7 @@ class CameraDevice {
   String password;
   String rtspPath;
   final bool isManuallyAdded;
+  String? serviceUrl; // ONVIF device service URL for fetching stream info
 
   CameraDevice({
     required this.id,
@@ -20,12 +21,18 @@ class CameraDevice {
     this.password = '',
     this.rtspPath = '/stream1',
     this.isManuallyAdded = false,
+    this.serviceUrl,
   });
 
-  /// Constructs the full RTSP URL with credentials
+  /// Constructs the full RTSP URL with credentials (URL encoded)
+  /// Properly encodes special characters in username/password to prevent URL parsing issues
   String get rtspUrl {
-    final credentials = username.isNotEmpty ? '$username:$password@' : '';
-    return 'rtsp://$credentials$ipAddress:$port$rtspPath';
+    if (username.isNotEmpty && password.isNotEmpty) {
+      final encodedUser = Uri.encodeComponent(username);
+      final encodedPass = Uri.encodeComponent(password);
+      return 'rtsp://$encodedUser:$encodedPass@$ipAddress:$port$rtspPath';
+    }
+    return 'rtsp://$ipAddress:$port$rtspPath';
   }
 
   /// Constructs RTSP URL without credentials (for display purposes)
@@ -35,6 +42,9 @@ class CameraDevice {
 
   /// Check if camera has credentials configured
   bool get hasCredentials => username.isNotEmpty && password.isNotEmpty;
+  
+  /// Check if this camera has ONVIF service URL for advanced features
+  bool get hasServiceUrl => serviceUrl != null && serviceUrl!.isNotEmpty;
 
   /// Create a copy with updated fields
   CameraDevice copyWith({
@@ -46,6 +56,7 @@ class CameraDevice {
     String? password,
     String? rtspPath,
     bool? isManuallyAdded,
+    String? serviceUrl,
   }) {
     return CameraDevice(
       id: id ?? this.id,
@@ -56,6 +67,7 @@ class CameraDevice {
       password: password ?? this.password,
       rtspPath: rtspPath ?? this.rtspPath,
       isManuallyAdded: isManuallyAdded ?? this.isManuallyAdded,
+      serviceUrl: serviceUrl ?? this.serviceUrl,
     );
   }
 
@@ -70,6 +82,7 @@ class CameraDevice {
       'password': password,
       'rtspPath': rtspPath,
       'isManuallyAdded': isManuallyAdded,
+      'serviceUrl': serviceUrl,
     };
   }
 
@@ -84,6 +97,7 @@ class CameraDevice {
       password: json['password'] as String? ?? '',
       rtspPath: json['rtspPath'] as String? ?? '/stream1',
       isManuallyAdded: json['isManuallyAdded'] as bool? ?? false,
+      serviceUrl: json['serviceUrl'] as String?,
     );
   }
 
@@ -109,4 +123,3 @@ class CameraDevice {
   @override
   int get hashCode => id.hashCode;
 }
-

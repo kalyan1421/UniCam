@@ -30,6 +30,12 @@ dependencies:
   # Persistent storage
   shared_preferences: ^2.3.3
 
+  # Network info for WiFi IP binding
+  network_info_plus: ^6.1.1
+  
+  # HTTP client for ONVIF SOAP requests
+  http: ^1.2.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

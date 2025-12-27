@@ -16,6 +16,7 @@ class CameraProvider extends ChangeNotifier {
   
   // State flags
   bool _isScanning = false;
+  bool _isFetchingStreamUrl = false;
   String _scanStatus = '';
   String? _errorMessage;
   
@@ -23,6 +24,7 @@ class CameraProvider extends ChangeNotifier {
   List<CameraDevice> get savedCameras => List.unmodifiable(_savedCameras);
   List<CameraDevice> get discoveredCameras => List.unmodifiable(_discoveredCameras);
   bool get isScanning => _isScanning;
+  bool get isFetchingStreamUrl => _isFetchingStreamUrl;
   String get scanStatus => _scanStatus;
   String? get errorMessage => _errorMessage;
   bool get hasSavedCameras => _savedCameras.isNotEmpty;
@@ -67,16 +69,51 @@ class CameraProvider extends ChangeNotifier {
   }
 
   /// Add a discovered camera to saved list
-  void addDiscoveredCamera(CameraDevice camera, {String? username, String? password}) {
-    if (!isCameraSaved(camera)) {
-      final updatedCamera = camera.copyWith(
-        username: username ?? '',
-        password: password ?? '',
-      );
-      _savedCameras.add(updatedCamera);
-      _saveCamerasToStorage();
-      notifyListeners();
+  /// Attempts to fetch the actual RTSP URL via ONVIF if credentials are provided
+  Future<void> addDiscoveredCamera(
+    CameraDevice camera, {
+    String? username,
+    String? password,
+  }) async {
+    if (isCameraSaved(camera)) return;
+
+    _isFetchingStreamUrl = true;
+    notifyListeners();
+
+    String rtspPath = camera.rtspPath;
+    
+    // If camera has service URL and credentials, try to fetch actual RTSP URL
+    if (camera.hasServiceUrl && 
+        username != null && username.isNotEmpty &&
+        password != null && password.isNotEmpty) {
+      try {
+        final streamUrl = await _discoveryService.fetchStreamUrl(
+          serviceUrl: camera.serviceUrl!,
+          username: username,
+          password: password,
+        );
+        
+        if (streamUrl != null) {
+          // Extract path from full RTSP URL
+          final uri = Uri.parse(streamUrl);
+          rtspPath = uri.path + (uri.query.isNotEmpty ? '?${uri.query}' : '');
+          debugPrint('Fetched RTSP path from ONVIF: $rtspPath');
+        }
+      } catch (e) {
+        debugPrint('Could not fetch RTSP URL via ONVIF, using default: $e');
+      }
     }
+    
+    final updatedCamera = camera.copyWith(
+      username: username ?? '',
+      password: password ?? '',
+      rtspPath: rtspPath,
+    );
+    
+    _savedCameras.add(updatedCamera);
+    _isFetchingStreamUrl = false;
+    await _saveCamerasToStorage();
+    notifyListeners();
   }
 
   /// Add a manually configured camera
@@ -124,6 +161,22 @@ class CameraProvider extends ChangeNotifier {
   Future<bool> testCameraConnection(String ipAddress, int port) async {
     return _discoveryService.testConnection(ipAddress, port);
   }
+  
+  /// Fetch RTSP stream URL using ONVIF protocol
+  Future<String?> fetchRtspUrl({
+    required String serviceUrl,
+    required String username,
+    required String password,
+  }) async {
+    return _discoveryService.fetchStreamUrl(
+      serviceUrl: serviceUrl,
+      username: username,
+      password: password,
+    );
+  }
+  
+  /// Get list of common RTSP paths to try
+  List<String> get commonRtspPaths => OnvifDiscoveryService.commonRtspPaths;
 
   /// Load saved cameras from local storage
   Future<void> _loadSavedCameras() async {
@@ -137,7 +190,7 @@ class CameraProvider extends ChangeNotifier {
       
       notifyListeners();
     } catch (e) {
-      print('Error loading saved cameras: $e');
+      debugPrint('Error loading saved cameras: $e');
       _savedCameras = [];
     }
   }
@@ -152,8 +205,7 @@ class CameraProvider extends ChangeNotifier {
       
       await prefs.setStringList('saved_cameras', camerasJson);
     } catch (e) {
-      print('Error saving cameras: $e');
+      debugPrint('Error saving cameras: $e');
     }
   }
 }
-
