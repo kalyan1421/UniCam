@@ -68,8 +68,8 @@ class CameraProvider extends ChangeNotifier {
     }
   }
 
-  /// Add a discovered camera to saved list
-  /// Attempts to fetch the actual RTSP URL via ONVIF if credentials are provided
+  /// Add a discovered camera with credentials
+  /// Uses ONVIF to fetch the REAL Stream URI instead of guessing
   Future<void> addDiscoveredCamera(
     CameraDevice camera, {
     String? username,
@@ -80,40 +80,43 @@ class CameraProvider extends ChangeNotifier {
     _isFetchingStreamUrl = true;
     notifyListeners();
 
-    String rtspPath = camera.rtspPath;
-    
-    // If camera has service URL and credentials, try to fetch actual RTSP URL
-    if (camera.hasServiceUrl && 
-        username != null && username.isNotEmpty &&
-        password != null && password.isNotEmpty) {
-      try {
-        final streamUrl = await _discoveryService.fetchStreamUrl(
-          serviceUrl: camera.serviceUrl!,
-          username: username,
-          password: password,
-        );
-        
-        if (streamUrl != null) {
-          // Extract path from full RTSP URL
-          final uri = Uri.parse(streamUrl);
-          rtspPath = uri.path + (uri.query.isNotEmpty ? '?${uri.query}' : '');
-          debugPrint('Fetched RTSP path from ONVIF: $rtspPath');
-        }
-      } catch (e) {
-        debugPrint('Could not fetch RTSP URL via ONVIF, using default: $e');
+    try {
+      // 1. Update camera with credentials
+      var cameraWithCreds = camera.copyWith(
+        username: username ?? '',
+        password: password ?? '',
+      );
+      
+      // 2. Use ONVIF to get the REAL Stream URI (via easy_onvif)
+      // This solves the issue of guessing paths like /stream1
+      if (cameraWithCreds.hasCredentials) {
+        debugPrint('Fetching real RTSP URL via ONVIF...');
+        cameraWithCreds = await _discoveryService.enrichCameraDetails(cameraWithCreds);
+        debugPrint('RTSP path: ${cameraWithCreds.rtspPath}');
       }
+      
+      // 3. Save to list
+      _savedCameras.add(cameraWithCreds);
+      await _saveCamerasToStorage();
+      
+    } catch (e) {
+      debugPrint('Error adding camera: $e');
+      // Still add camera with default path if enrichment fails
+      _savedCameras.add(camera.copyWith(
+        username: username ?? '',
+        password: password ?? '',
+      ));
+      await _saveCamerasToStorage();
+    } finally {
+      _isFetchingStreamUrl = false;
+      notifyListeners();
     }
-    
-    final updatedCamera = camera.copyWith(
-      username: username ?? '',
-      password: password ?? '',
-      rtspPath: rtspPath,
-    );
-    
-    _savedCameras.add(updatedCamera);
-    _isFetchingStreamUrl = false;
-    await _saveCamerasToStorage();
-    notifyListeners();
+  }
+
+  /// Add camera with credentials and fetch real stream URL
+  /// Convenience method matching the user's expected API
+  Future<void> addCameraWithCredentials(CameraDevice camera, String user, String pass) async {
+    await addDiscoveredCamera(camera, username: user, password: pass);
   }
 
   /// Add a manually configured camera
@@ -144,6 +147,22 @@ class CameraProvider extends ChangeNotifier {
     }
   }
 
+  /// Re-fetch stream URL for a saved camera (useful if URL changed)
+  Future<void> refreshCameraStreamUrl(CameraDevice camera) async {
+    if (!camera.hasCredentials) return;
+    
+    _isFetchingStreamUrl = true;
+    notifyListeners();
+    
+    try {
+      final enrichedCamera = await _discoveryService.enrichCameraDetails(camera);
+      updateCamera(enrichedCamera);
+    } finally {
+      _isFetchingStreamUrl = false;
+      notifyListeners();
+    }
+  }
+
   /// Remove a camera from saved list
   void removeCamera(String cameraId) {
     _savedCameras.removeWhere((c) => c.id == cameraId);
@@ -160,19 +179,6 @@ class CameraProvider extends ChangeNotifier {
   /// Test connection to a camera
   Future<bool> testCameraConnection(String ipAddress, int port) async {
     return _discoveryService.testConnection(ipAddress, port);
-  }
-  
-  /// Fetch RTSP stream URL using ONVIF protocol
-  Future<String?> fetchRtspUrl({
-    required String serviceUrl,
-    required String username,
-    required String password,
-  }) async {
-    return _discoveryService.fetchStreamUrl(
-      serviceUrl: serviceUrl,
-      username: username,
-      password: password,
-    );
   }
   
   /// Get list of common RTSP paths to try
