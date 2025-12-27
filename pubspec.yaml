@@ -1,0 +1,39 @@
+name: cctv_open
+description: "Flutter app for managing IP cameras with ONVIF discovery and RTSP streaming."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.8.1
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Icons
+  cupertino_icons: ^1.0.8
+
+  # State Management
+  provider: ^6.1.2
+
+  # XML Parsing for ONVIF
+  xml: ^6.5.0
+
+  # Video Player (media_kit - recommended for stable RTSP streaming)
+  media_kit: ^1.1.11
+  media_kit_video: ^1.2.5
+  media_kit_libs_video: ^1.0.5
+
+  # UUID generation for camera IDs
+  uuid: ^4.5.1
+
+  # Persistent storage
+  shared_preferences: ^2.3.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
