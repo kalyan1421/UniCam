@@ -4,8 +4,10 @@ import 'dart:convert';
 class CameraDevice {
   final String id;
   String name;
-  String ipAddress;
-  int port;
+  String ipAddress;       // Local IP (e.g., 192.168.1.50)
+  int port;               // Local Port (e.g., 554)
+  String? publicIpAddress; // Public IP or DDNS (e.g., myhome.ddns.net)
+  int? publicPort;         // Public Port (e.g., 8554)
   String username;
   String password;
   String rtspPath;
@@ -17,6 +19,8 @@ class CameraDevice {
     required this.name,
     required this.ipAddress,
     this.port = 554,
+    this.publicIpAddress,
+    this.publicPort,
     this.username = '',
     this.password = '',
     this.rtspPath = '/stream1',
@@ -27,12 +31,27 @@ class CameraDevice {
   /// Constructs the full RTSP URL with credentials (URL encoded)
   /// Properly encodes special characters in username/password to prevent URL parsing issues
   String get rtspUrl {
+    return getRtspUrl(usePublic: false);
+  }
+
+  /// Helper to get the correct RTSP URL based on connection mode
+  /// [usePublic] - If true, uses publicIpAddress and publicPort when available
+  String getRtspUrl({bool usePublic = false}) {
+    // Determine which IP and Port to use
+    final targetIp = (usePublic && publicIpAddress != null && publicIpAddress!.isNotEmpty) 
+        ? publicIpAddress! 
+        : ipAddress;
+        
+    final targetPort = (usePublic && publicPort != null) 
+        ? publicPort! 
+        : port;
+
     if (username.isNotEmpty && password.isNotEmpty) {
       final encodedUser = Uri.encodeComponent(username);
       final encodedPass = Uri.encodeComponent(password);
-      return 'rtsp://$encodedUser:$encodedPass@$ipAddress:$port$rtspPath';
+      return 'rtsp://$encodedUser:$encodedPass@$targetIp:$targetPort$rtspPath';
     }
-    return 'rtsp://$ipAddress:$port$rtspPath';
+    return 'rtsp://$targetIp:$targetPort$rtspPath';
   }
 
   /// Constructs RTSP URL without credentials (for display purposes)
@@ -45,6 +64,9 @@ class CameraDevice {
   
   /// Check if this camera has ONVIF service URL for advanced features
   bool get hasServiceUrl => serviceUrl != null && serviceUrl!.isNotEmpty;
+  
+  /// Check if camera has remote access configured
+  bool get hasRemoteAccess => publicIpAddress != null && publicIpAddress!.isNotEmpty;
 
   /// Create a copy with updated fields
   CameraDevice copyWith({
@@ -52,6 +74,8 @@ class CameraDevice {
     String? name,
     String? ipAddress,
     int? port,
+    String? publicIpAddress,
+    int? publicPort,
     String? username,
     String? password,
     String? rtspPath,
@@ -63,6 +87,8 @@ class CameraDevice {
       name: name ?? this.name,
       ipAddress: ipAddress ?? this.ipAddress,
       port: port ?? this.port,
+      publicIpAddress: publicIpAddress ?? this.publicIpAddress,
+      publicPort: publicPort ?? this.publicPort,
       username: username ?? this.username,
       password: password ?? this.password,
       rtspPath: rtspPath ?? this.rtspPath,
@@ -78,6 +104,8 @@ class CameraDevice {
       'name': name,
       'ipAddress': ipAddress,
       'port': port,
+      'publicIpAddress': publicIpAddress,
+      'publicPort': publicPort,
       'username': username,
       'password': password,
       'rtspPath': rtspPath,
@@ -93,6 +121,8 @@ class CameraDevice {
       name: json['name'] as String,
       ipAddress: json['ipAddress'] as String,
       port: json['port'] as int? ?? 554,
+      publicIpAddress: json['publicIpAddress'] as String?,
+      publicPort: json['publicPort'] as int?,
       username: json['username'] as String? ?? '',
       password: json['password'] as String? ?? '',
       rtspPath: json['rtspPath'] as String? ?? '/stream1',

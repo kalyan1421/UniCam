@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
@@ -30,6 +31,7 @@ class _StreamViewScreenState extends State<StreamViewScreen> {
   bool _isPlaying = false;
   int _connectionAttempts = 0;
   String _currentRtspPath = '';
+  bool _isUsingPublicConnection = false;
 
   @override
   void initState() {
@@ -89,22 +91,93 @@ class _StreamViewScreenState extends State<StreamViewScreen> {
 
   Future<void> _initializeStream() async {
     _connectionAttempts++;
+    bool usePublic = false;
     
+    setState(() {
+      _hasError = false;
+      _isBuffering = true;
+      _errorMessage = '';
+    });
+
     try {
-      final rtspUrl = _buildRtspUrl(_currentRtspPath);
-      print('[Stream] Attempt #$_connectionAttempts - Opening: $rtspUrl');
+      // 1. Try Local Connection First (Fast check using HTTP HEAD request)
+      // This is more reliable than raw socket for apps like IP Webcam
+      print('[Stream] Testing Local Connection: ${_currentCamera.ipAddress}:${_currentCamera.port}');
+      bool localReachable = false;
+      try {
+        final httpClient = HttpClient()..connectionTimeout = const Duration(seconds: 2);
+        final request = await httpClient.headUrl(
+          Uri.parse('http://${_currentCamera.ipAddress}:${_currentCamera.port}/'),
+        ).timeout(const Duration(seconds: 3));
+        final response = await request.close().timeout(const Duration(seconds: 3));
+        await response.drain();
+        httpClient.close();
+        localReachable = true;
+        print('✅ Local Connection Available (HTTP response: ${response.statusCode})');
+      } catch (httpError) {
+        // HTTP failed, try raw socket as fallback
+        print('⚠️ HTTP check failed, trying socket: $httpError');
+        try {
+          await Socket.connect(
+            _currentCamera.ipAddress, 
+            _currentCamera.port, 
+            timeout: const Duration(seconds: 2),
+          ).then((socket) => socket.destroy());
+          localReachable = true;
+          print('✅ Local Connection Available (Socket)');
+        } catch (socketError) {
+          print('⚠️ Socket check also failed: $socketError');
+        }
+      }
       
+      if (!localReachable) {
+        // 2. Local failed? Check if we have Public IP Configured
+        if (_currentCamera.hasRemoteAccess) {
+          print('⚠️ Switching to Public IP: ${_currentCamera.publicIpAddress}');
+          usePublic = true;
+        } else {
+          // No public IP configured, try local anyway (RTSP might still work)
+          print('ℹ️ No public IP configured, attempting RTSP stream anyway');
+        }
+      }
+
+      // Update connection state
       setState(() {
-        _hasError = false;
-        _isBuffering = true;
-        _errorMessage = '';
+        _isUsingPublicConnection = usePublic;
       });
+
+      // 3. Generate URL based on the result using the model's helper method
+      final rtspUrl = _buildRtspUrl(_currentRtspPath, usePublic: usePublic);
+      
+      print('[Stream] Attempt #$_connectionAttempts - Opening: $rtspUrl');
       
       await _player.open(
         Media(rtspUrl),
         play: true,
       );
       
+      // Show connection type notification
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Row(
+            children: [
+              Icon(
+                usePublic ? Icons.public_rounded : Icons.wifi_rounded,
+                color: Colors.white,
+                size: 18,
+              ),
+              const SizedBox(width: 8),
+              Text(usePublic ? 'Connected via Internet (Remote)' : 'Connected via Wi-Fi (Local)'),
+            ],
+          ),
+          duration: const Duration(seconds: 2),
+          backgroundColor: usePublic ? Colors.orange.shade700 : Colors.green.shade700,
+          behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.all(16),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ));
+      }
+
     } catch (e) {
       print('[Stream] Exception: $e');
       setState(() {
@@ -114,14 +187,24 @@ class _StreamViewScreenState extends State<StreamViewScreen> {
     }
   }
 
-  String _buildRtspUrl(String path) {
+  String _buildRtspUrl(String path, {bool usePublic = false}) {
     final camera = _currentCamera;
+    
+    // Determine which IP and Port to use
+    final targetIp = (usePublic && camera.publicIpAddress != null && camera.publicIpAddress!.isNotEmpty) 
+        ? camera.publicIpAddress! 
+        : camera.ipAddress;
+        
+    final targetPort = (usePublic && camera.publicPort != null) 
+        ? camera.publicPort! 
+        : camera.port;
+    
     if (camera.username.isNotEmpty && camera.password.isNotEmpty) {
       final encodedUser = Uri.encodeComponent(camera.username);
       final encodedPass = Uri.encodeComponent(camera.password);
-      return 'rtsp://$encodedUser:$encodedPass@${camera.ipAddress}:${camera.port}$path';
+      return 'rtsp://$encodedUser:$encodedPass@$targetIp:$targetPort$path';
     }
-    return 'rtsp://${camera.ipAddress}:${camera.port}$path';
+    return 'rtsp://$targetIp:$targetPort$path';
   }
 
   Future<void> _tryPath(String newPath) async {
@@ -387,16 +470,27 @@ class _StreamViewScreenState extends State<StreamViewScreen> {
             ),
             child: Column(
               children: [
-                Text(
-                  'Tried URL:',
-                  style: TextStyle(
-                    color: Colors.white.withOpacity(0.5),
-                    fontSize: 11,
-                  ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      _isUsingPublicConnection ? Icons.public_rounded : Icons.wifi_rounded,
+                      color: _isUsingPublicConnection ? Colors.orange : Colors.white.withOpacity(0.5),
+                      size: 14,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      _isUsingPublicConnection ? 'Tried URL (Remote):' : 'Tried URL (Local):',
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.5),
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'rtsp://${_currentCamera.ipAddress}:${_currentCamera.port}$_currentRtspPath',
+                  _buildRtspUrl(_currentRtspPath, usePublic: _isUsingPublicConnection).replaceAll(RegExp(r':[^:@]+@'), ':****@'),
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     color: Colors.white.withOpacity(0.7),
@@ -407,6 +501,34 @@ class _StreamViewScreenState extends State<StreamViewScreen> {
               ],
             ),
           ),
+          
+          // Show remote access tip if not configured
+          if (!_currentCamera.hasRemoteAccess) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF00E5FF).withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFF00E5FF).withOpacity(0.3)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.tips_and_updates_rounded, color: Color(0xFF00E5FF), size: 18),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Tip: Configure Remote Access in camera settings to view from anywhere',
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.7),
+                        fontSize: 11,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           
           if (_errorMessage.isNotEmpty) ...[
             const SizedBox(height: 12),
@@ -521,12 +643,43 @@ class _StreamViewScreenState extends State<StreamViewScreen> {
                             fontWeight: FontWeight.bold,
                           ),
                         ),
-                        Text(
-                          _currentCamera.ipAddress,
-                          style: TextStyle(
-                            color: Colors.white.withOpacity(0.6),
-                            fontSize: 13,
-                          ),
+                        Row(
+                          children: [
+                            Icon(
+                              _isUsingPublicConnection ? Icons.public_rounded : Icons.wifi_rounded,
+                              color: _isUsingPublicConnection ? Colors.orange : Colors.white.withOpacity(0.6),
+                              size: 14,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              _isUsingPublicConnection 
+                                  ? '${_currentCamera.publicIpAddress}' 
+                                  : _currentCamera.ipAddress,
+                              style: TextStyle(
+                                color: _isUsingPublicConnection ? Colors.orange : Colors.white.withOpacity(0.6),
+                                fontSize: 13,
+                              ),
+                            ),
+                            if (_isUsingPublicConnection) ...[
+                              const SizedBox(width: 6),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: Colors.orange.withOpacity(0.2),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: const Text(
+                                  'REMOTE',
+                                  style: TextStyle(
+                                    color: Colors.orange,
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.bold,
+                                    letterSpacing: 0.5,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
                         ),
                       ],
                     ),
@@ -734,6 +887,12 @@ class _PathSelectorSheet extends StatelessWidget {
                     description: 'Generic / Default',
                     isSelected: currentPath == '/stream1',
                     onTap: () => onPathSelected('/stream1'),
+                  ),
+                  _PathOption(
+                    path: '/h264_ulaw.sdp',
+                    description: 'Android IP Webcam App',
+                    isSelected: currentPath == '/h264_ulaw.sdp',
+                    onTap: () => onPathSelected('/h264_ulaw.sdp'),
                   ),
                   _PathOption(
                     path: '/Streaming/Channels/101',

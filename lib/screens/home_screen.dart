@@ -48,12 +48,96 @@ class HomeScreen extends StatelessWidget {
           ],
         ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh_rounded, color: Color(0xFF00E5FF)),
-            onPressed: () {
-              context.read<CameraProvider>().startDiscovery();
+          // Scan options menu
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.wifi_find_rounded, color: Color(0xFF00E5FF)),
+            tooltip: 'Scan Options',
+            color: const Color(0xFF141A22),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            onSelected: (value) {
+              final provider = context.read<CameraProvider>();
+              switch (value) {
+                case 'full':
+                  provider.startDiscovery();
+                  break;
+                case 'onvif':
+                  provider.startOnvifDiscovery();
+                  break;
+                case 'generic':
+                  provider.startGenericScan();
+                  break;
+              }
             },
-            tooltip: 'Rescan Network',
+            itemBuilder: (context) => [
+              PopupMenuItem(
+                value: 'full',
+                child: Row(
+                  children: [
+                    const Icon(Icons.search_rounded, color: Color(0xFF00E5FF), size: 20),
+                    const SizedBox(width: 12),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Full Scan',
+                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                        ),
+                        Text(
+                          'ONVIF + Generic cameras',
+                          style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 11),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              PopupMenuItem(
+                value: 'onvif',
+                child: Row(
+                  children: [
+                    const Icon(Icons.wifi_rounded, color: Colors.green, size: 20),
+                    const SizedBox(width: 12),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'ONVIF Only',
+                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                        ),
+                        Text(
+                          'Professional IP cameras',
+                          style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 11),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              PopupMenuItem(
+                value: 'generic',
+                child: Row(
+                  children: [
+                    const Icon(Icons.phone_android_rounded, color: Colors.orange, size: 20),
+                    const SizedBox(width: 12),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Generic Scan',
+                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                        ),
+                        Text(
+                          'IP Webcam, Phone cameras',
+                          style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 11),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -111,8 +195,8 @@ class HomeScreen extends StatelessWidget {
               if (!provider.isScanning && 
                   !provider.hasDiscoveredCameras && 
                   !provider.hasSavedCameras)
-                const SliverFillRemaining(
-                  child: EmptyState(),
+                SliverFillRemaining(
+                  child: _buildEmptyState(context),
                 ),
               
               // Bottom padding
@@ -148,6 +232,153 @@ class HomeScreen extends StatelessWidget {
     return const SizedBox.shrink();
   }
 
+  Widget _buildEmptyState(BuildContext context) {
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(32),
+              decoration: BoxDecoration(
+                color: const Color(0xFF141A22),
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: const Color(0xFF00E5FF).withOpacity(0.3),
+                  width: 2,
+                ),
+              ),
+              child: Icon(
+                Icons.videocam_off_rounded,
+                size: 80,
+                color: Colors.white.withOpacity(0.3),
+              ),
+            ),
+            const SizedBox(height: 32),
+            const Text(
+              'No Cameras Added',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Scan your network or add cameras manually',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.6),
+                fontSize: 14,
+              ),
+            ),
+            const SizedBox(height: 32),
+            
+            // Scan options
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              alignment: WrapAlignment.center,
+              children: [
+                _QuickScanButton(
+                  icon: Icons.search_rounded,
+                  label: 'Full Scan',
+                  color: const Color(0xFF00E5FF),
+                  onTap: () => context.read<CameraProvider>().startDiscovery(),
+                ),
+                _QuickScanButton(
+                  icon: Icons.phone_android_rounded,
+                  label: 'IP Webcam',
+                  color: Colors.orange,
+                  onTap: () => context.read<CameraProvider>().startGenericScan(),
+                ),
+              ],
+            ),
+            
+            const SizedBox(height: 24),
+            
+            // Or divider
+            Row(
+              children: [
+                Expanded(child: Divider(color: Colors.white.withOpacity(0.1))),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Text(
+                    'OR',
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(0.4),
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                Expanded(child: Divider(color: Colors.white.withOpacity(0.1))),
+              ],
+            ),
+            
+            const SizedBox(height: 24),
+            
+            // Manual add button
+            OutlinedButton.icon(
+              onPressed: () => _navigateToAddCamera(context),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.white,
+                side: const BorderSide(color: Colors.white24),
+                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+              icon: const Icon(Icons.edit_rounded),
+              label: const Text('Add Manually'),
+            ),
+            
+            const SizedBox(height: 32),
+            
+            // Tips
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.blue.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.blue.withOpacity(0.3)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.lightbulb_outline, color: Colors.blue.shade300, size: 20),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Tips',
+                        style: TextStyle(
+                          color: Colors.blue.shade300,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '• Use "IP Webcam" scan for phone cameras\n'
+                    '• Use "Full Scan" for professional ONVIF cameras\n'
+                    '• Make sure cameras are on the same WiFi network',
+                    style: TextStyle(
+                      color: Colors.blue.shade200,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _showCredentialsDialog(BuildContext context, CameraDevice camera) {
     showDialog(
       context: context,
@@ -180,7 +411,7 @@ class HomeScreen extends StatelessWidget {
             ),
           );
           
-          // Add camera (this now fetches RTSP URL via ONVIF)
+          // Add camera (this now fetches RTSP URL via ONVIF if available)
           await context.read<CameraProvider>().addDiscoveredCamera(
             camera,
             username: username,
@@ -280,3 +511,36 @@ class _SectionHeader extends StatelessWidget {
   }
 }
 
+class _QuickScanButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _QuickScanButton({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ElevatedButton.icon(
+      onPressed: onTap,
+      style: ElevatedButton.styleFrom(
+        backgroundColor: color,
+        foregroundColor: Colors.black,
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+      ),
+      icon: Icon(icon, size: 20),
+      label: Text(
+        label,
+        style: const TextStyle(fontWeight: FontWeight.bold),
+      ),
+    );
+  }
+}

@@ -5,7 +5,7 @@ import 'package:network_info_plus/network_info_plus.dart';
 import 'package:uuid/uuid.dart';
 import '../models/camera_device.dart';
 
-/// Service for discovering ONVIF-compatible cameras and fetching stream URIs
+/// Service for discovering ONVIF-compatible cameras and generic RTSP cameras
 class OnvifDiscoveryService {
   static const String _multicastAddress = '239.255.255.250';
   static const int _multicastPort = 3702;
@@ -177,6 +177,126 @@ class OnvifDiscoveryService {
     return discoveredCameras;
   }
 
+  /// NEW: Scan for generic HTTP/RTSP cameras on common ports
+  /// This helps discover IP Webcam and other non-ONVIF cameras
+  Future<List<CameraDevice>> scanGenericCameras({
+    void Function(String)? onStatusUpdate,
+  }) async {
+    final List<CameraDevice> discoveredCameras = [];
+    
+    try {
+      onStatusUpdate?.call('Scanning for generic cameras...');
+      
+      // Get local network prefix
+      String? wifiIP = await _networkInfo.getWifiIP();
+      if (wifiIP == null) {
+        _log('Cannot get WiFi IP for scanning');
+        return [];
+      }
+      
+      // Extract network prefix (e.g., "192.168.1")
+      final parts = wifiIP.split('.');
+      if (parts.length != 4) return [];
+      final networkPrefix = '${parts[0]}.${parts[1]}.${parts[2]}';
+      
+      onStatusUpdate?.call('Scanning network: $networkPrefix.x');
+      
+      // Common ports for IP cameras and IP Webcam
+      final portsToScan = [
+        8080,  // IP Webcam default
+        8081,  // Common HTTP alternative
+        8554,  // RTSP alternative
+        554,   // Standard RTSP
+        80,    // HTTP
+      ];
+      
+      // Scan common IP range (usually .100-.254 for cameras)
+      final scanFutures = <Future<CameraDevice?>>[];
+      
+      for (int i = 100; i < 255; i++) {
+        final ip = '$networkPrefix.$i';
+        
+        // Skip our own IP
+        if (ip == wifiIP) continue;
+        
+        for (final port in portsToScan) {
+          scanFutures.add(_probeGenericCamera(ip, port));
+        }
+      }
+      
+      // Wait for all scans with timeout
+      final results = await Future.wait(
+        scanFutures,
+        eagerError: false,
+      ).timeout(
+        const Duration(seconds: 15),
+        onTimeout: () => List.filled(scanFutures.length, null),
+      );
+      
+      // Collect found cameras (remove duplicates by IP)
+      final foundIps = <String>{};
+      for (final camera in results) {
+        if (camera != null && !foundIps.contains(camera.ipAddress)) {
+          foundIps.add(camera.ipAddress);
+          discoveredCameras.add(camera);
+          onStatusUpdate?.call('Found generic camera at ${camera.ipAddress}:${camera.port}');
+        }
+      }
+      
+      onStatusUpdate?.call('Generic scan complete. Found ${discoveredCameras.length} camera(s).');
+      
+    } catch (e) {
+      _log('Generic camera scan error: $e');
+      onStatusUpdate?.call('Scan error: $e');
+    }
+    
+    return discoveredCameras;
+  }
+
+  /// Probe a specific IP:port for HTTP/RTSP camera
+  Future<CameraDevice?> _probeGenericCamera(String ip, int port) async {
+    try {
+      // Try to connect to the port
+      final socket = await Socket.connect(
+        ip,
+        port,
+        timeout: const Duration(seconds: 2),
+      );
+      
+      await socket.close();
+      
+      // If connection succeeds, create a camera entry
+      return CameraDevice(
+        id: _uuid.v4(),
+        name: 'Camera [$ip:$port]',
+        ipAddress: ip,
+        port: port,
+        username: '',
+        password: '',
+        rtspPath: _guessRtspPathByPort(port),
+        isManuallyAdded: false,
+      );
+      
+    } catch (e) {
+      // Connection failed, no camera here
+      return null;
+    }
+  }
+
+  /// Guess appropriate RTSP path based on port
+  String _guessRtspPathByPort(int port) {
+    switch (port) {
+      case 8080:
+      case 8081:
+        return '/h264_pcm.sdp'; // IP Webcam default
+      case 8554:
+      case 554:
+        return '/stream1'; // Standard RTSP
+      default:
+        return '/video';
+    }
+  }
+
   /// Scan network and return just IPs (lightweight discovery)
   Future<List<String>> scanForCameraIps() async {
     final Set<String> discoveredIps = {};
@@ -301,23 +421,47 @@ class OnvifDiscoveryService {
   }
   
   /// Common RTSP paths for different camera manufacturers
-  /// Used as fallback when ONVIF enrichment fails
+  /// UPDATED with IP Webcam paths
   static const List<String> commonRtspPaths = [
+    // IP Webcam paths (Android)
+    '/h264_pcm.sdp',        // IP Webcam H.264 + PCM audio
+    '/h264_ulaw.sdp',       // IP Webcam H.264 + uLaw audio
+    '/h264_opus.sdp',       // IP Webcam H.264 + Opus audio
+    '/video',               // IP Webcam video only
+    '/videofeed',           // IP Webcam HTTP feed
+    
+    // Generic paths
     '/stream1',
-    '/Streaming/Channels/101',  // Hikvision main stream
-    '/Streaming/Channels/102',  // Hikvision sub stream  
-    '/cam/realmonitor?channel=1&subtype=0', // Dahua main
-    '/cam/realmonitor?channel=1&subtype=1', // Dahua sub
     '/live/ch0',
     '/live/ch00_0',
     '/h264',
     '/video1',
-    '/MediaInput/h264',
-    '/axis-media/media.amp', // Axis
-    '/videoMain',
-    '/live.sdp',
     '/onvif1',
     '/1',
+    '/live.sdp',
+    
+    // Hikvision
+    '/Streaming/Channels/101',  // Main stream
+    '/Streaming/Channels/102',  // Sub stream  
+    '/Streaming/Channels/1',
+    
+    // Dahua
+    '/cam/realmonitor?channel=1&subtype=0', // Main
+    '/cam/realmonitor?channel=1&subtype=1', // Sub
+    
+    // Axis
+    '/axis-media/media.amp',
+    '/axis-media/media.3gp',
+    
+    // Foscam
+    '/videoMain',
+    '/videoSub',
+    
+    // Other manufacturers
+    '/MediaInput/h264',
+    '/MediaInput/h264/stream_1',
+    '/mpeg4',
+    '/mjpeg',
   ];
 
   void _log(String message) {

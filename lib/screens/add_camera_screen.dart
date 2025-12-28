@@ -24,10 +24,14 @@ class _AddCameraScreenState extends State<AddCameraScreen> with SingleTickerProv
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
   final _rtspPathController = TextEditingController(text: '/stream1');
+  // Remote access controllers
+  final _publicIpController = TextEditingController();
+  final _publicPortController = TextEditingController();
   
   bool _isTestingConnection = false;
   bool? _connectionTestResult;
   bool _obscurePassword = true;
+  bool _showRemoteAccessHelp = false;
 
   @override
   void initState() {
@@ -44,6 +48,8 @@ class _AddCameraScreenState extends State<AddCameraScreen> with SingleTickerProv
     _usernameController.dispose();
     _passwordController.dispose();
     _rtspPathController.dispose();
+    _publicIpController.dispose();
+    _publicPortController.dispose();
     super.dispose();
   }
 
@@ -221,6 +227,107 @@ class _AddCameraScreenState extends State<AddCameraScreen> with SingleTickerProv
             
             const SizedBox(height: 24),
             
+            // REMOTE ACCESS SECTION
+            Row(
+              children: [
+                Text(
+                  'REMOTE ACCESS (OPTIONAL)',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white.withOpacity(0.5),
+                    letterSpacing: 1.5,
+                  ),
+                ),
+                const Spacer(),
+                GestureDetector(
+                  onTap: () => setState(() => _showRemoteAccessHelp = !_showRemoteAccessHelp),
+                  child: Icon(
+                    _showRemoteAccessHelp ? Icons.help : Icons.help_outline,
+                    color: const Color(0xFF00E5FF),
+                    size: 20,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            
+            // Remote access help info
+            if (_showRemoteAccessHelp)
+              Container(
+                padding: const EdgeInsets.all(12),
+                margin: const EdgeInsets.only(bottom: 12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF00E5FF).withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: const Color(0xFF00E5FF).withOpacity(0.3)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.public_rounded, color: Color(0xFF00E5FF), size: 18),
+                        const SizedBox(width: 8),
+                        const Text(
+                          'View From Anywhere Setup',
+                          style: TextStyle(
+                            color: Color(0xFF00E5FF),
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      '1. Set a static IP for your camera in router settings\n'
+                      '2. Configure Port Forwarding in your router:\n'
+                      '   • External Port: 8554 (your choice)\n'
+                      '   • Internal IP: Camera\'s local IP\n'
+                      '   • Internal Port: 554 (camera RTSP port)\n'
+                      '3. Use DDNS service (e.g., No-IP, DuckDNS) for a permanent address',
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.7),
+                        fontSize: 11,
+                        height: 1.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  flex: 2,
+                  child: _buildTextField(
+                    controller: _publicIpController,
+                    label: 'Public IP / DDNS',
+                    hint: 'e.g., myhome.ddns.net',
+                    icon: Icons.public_rounded,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _buildTextField(
+                    controller: _publicPortController,
+                    label: 'Ext. Port',
+                    hint: '8554',
+                    icon: Icons.numbers_rounded,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [
+                      FilteringTextInputFormatter.digitsOnly,
+                      LengthLimitingTextInputFormatter(5),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            
+            const SizedBox(height: 24),
+            
             // Credentials section
             Text(
               'CREDENTIALS',
@@ -298,7 +405,7 @@ class _AddCameraScreenState extends State<AddCameraScreen> with SingleTickerProv
                   const SizedBox(width: 12),
                   Expanded(
                     child: Text(
-                      'Common paths: /stream1, /live/ch0, /h264, /Streaming/Channels/1',
+                      'Common paths: /stream1, /h264_ulaw.sdp (Android IP Webcam, port 8080), /live/ch0, /Streaming/Channels/1',
                       style: TextStyle(
                         color: Colors.amber.shade200,
                         fontSize: 12,
@@ -552,6 +659,8 @@ class _AddCameraScreenState extends State<AddCameraScreen> with SingleTickerProv
       name: _nameController.text,
       ipAddress: _ipController.text,
       port: int.tryParse(_portController.text) ?? 554,
+      publicIpAddress: _publicIpController.text.isEmpty ? null : _publicIpController.text,
+      publicPort: int.tryParse(_publicPortController.text),
       username: _usernameController.text,
       password: _passwordController.text,
       rtspPath: _rtspPathController.text.isEmpty ? '/stream1' : _rtspPathController.text,

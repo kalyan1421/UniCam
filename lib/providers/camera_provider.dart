@@ -39,8 +39,63 @@ class CameraProvider extends ChangeNotifier {
     return _savedCameras.any((c) => c.ipAddress == camera.ipAddress);
   }
 
-  /// Start ONVIF discovery scan
+  /// Start comprehensive discovery scan (ONVIF + Generic)
   Future<void> startDiscovery() async {
+    _isScanning = true;
+    _scanStatus = 'Initializing...';
+    _errorMessage = null;
+    _discoveredCameras = [];
+    notifyListeners();
+
+    try {
+      // Step 1: ONVIF Discovery
+      _scanStatus = 'Scanning for ONVIF cameras...';
+      notifyListeners();
+      
+      final onvifCameras = await _discoveryService.discoverCameras(
+        onStatusUpdate: (status) {
+          _scanStatus = status;
+          notifyListeners();
+        },
+      );
+      
+      _discoveredCameras.addAll(onvifCameras);
+      
+      // Step 2: Generic HTTP/RTSP scan (for IP Webcam, etc.)
+      _scanStatus = 'Scanning for generic cameras...';
+      notifyListeners();
+      
+      final genericCameras = await _discoveryService.scanGenericCameras(
+        onStatusUpdate: (status) {
+          _scanStatus = status;
+          notifyListeners();
+        },
+      );
+      
+      // Merge cameras, avoiding duplicates by IP
+      final existingIps = _discoveredCameras.map((c) => c.ipAddress).toSet();
+      for (final camera in genericCameras) {
+        if (!existingIps.contains(camera.ipAddress)) {
+          _discoveredCameras.add(camera);
+        }
+      }
+      
+      _scanStatus = _discoveredCameras.isEmpty 
+          ? 'No cameras found. Try manual addition.'
+          : 'Found ${_discoveredCameras.length} camera(s)';
+          
+    } catch (e) {
+      _errorMessage = 'Discovery failed: $e';
+      _scanStatus = 'Error during discovery';
+      debugPrint('Discovery error: $e');
+    } finally {
+      _isScanning = false;
+      notifyListeners();
+    }
+  }
+
+  /// ONVIF-only discovery (faster, for real ONVIF cameras)
+  Future<void> startOnvifDiscovery() async {
     _isScanning = true;
     _scanStatus = 'Initializing...';
     _errorMessage = null;
@@ -57,8 +112,8 @@ class CameraProvider extends ChangeNotifier {
       
       _discoveredCameras = cameras;
       _scanStatus = cameras.isEmpty 
-          ? 'No cameras found. Try manual addition.'
-          : 'Found ${cameras.length} camera(s)';
+          ? 'No ONVIF cameras found.'
+          : 'Found ${cameras.length} ONVIF camera(s)';
     } catch (e) {
       _errorMessage = 'Discovery failed: $e';
       _scanStatus = 'Error during discovery';
@@ -68,8 +123,37 @@ class CameraProvider extends ChangeNotifier {
     }
   }
 
+  /// Generic camera scan (for IP Webcam and non-ONVIF cameras)
+  Future<void> startGenericScan() async {
+    _isScanning = true;
+    _scanStatus = 'Scanning network...';
+    _errorMessage = null;
+    _discoveredCameras = [];
+    notifyListeners();
+
+    try {
+      final cameras = await _discoveryService.scanGenericCameras(
+        onStatusUpdate: (status) {
+          _scanStatus = status;
+          notifyListeners();
+        },
+      );
+      
+      _discoveredCameras = cameras;
+      _scanStatus = cameras.isEmpty 
+          ? 'No cameras found.'
+          : 'Found ${cameras.length} camera(s)';
+    } catch (e) {
+      _errorMessage = 'Scan failed: $e';
+      _scanStatus = 'Error during scan';
+    } finally {
+      _isScanning = false;
+      notifyListeners();
+    }
+  }
+
   /// Add a discovered camera with credentials
-  /// Uses ONVIF to fetch the REAL Stream URI instead of guessing
+  /// Uses ONVIF to fetch the REAL Stream URI instead of guessing (if ONVIF-capable)
   Future<void> addDiscoveredCamera(
     CameraDevice camera, {
     String? username,
@@ -87,12 +171,19 @@ class CameraProvider extends ChangeNotifier {
         password: password ?? '',
       );
       
-      // 2. Use ONVIF to get the REAL Stream URI (via easy_onvif)
-      // This solves the issue of guessing paths like /stream1
-      if (cameraWithCreds.hasCredentials) {
+      // 2. If camera has ONVIF service URL, try to get real stream URI
+      // Otherwise use the guessed path (good for IP Webcam)
+      if (cameraWithCreds.hasServiceUrl && cameraWithCreds.hasCredentials) {
         debugPrint('Fetching real RTSP URL via ONVIF...');
-        cameraWithCreds = await _discoveryService.enrichCameraDetails(cameraWithCreds);
-        debugPrint('RTSP path: ${cameraWithCreds.rtspPath}');
+        try {
+          cameraWithCreds = await _discoveryService.enrichCameraDetails(cameraWithCreds);
+          debugPrint('RTSP path: ${cameraWithCreds.rtspPath}');
+        } catch (e) {
+          debugPrint('ONVIF enrichment failed, using default path: $e');
+          // Continue with guessed path
+        }
+      } else {
+        debugPrint('Using default path (no ONVIF or no creds): ${cameraWithCreds.rtspPath}');
       }
       
       // 3. Save to list
