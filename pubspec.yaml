@@ -36,6 +36,9 @@ dependencies:
   # Permission handler (for Android 13+ and iOS)
   permission_handler: ^11.3.1
 
+  # Wakelock to keep screen on during streaming
+  wakelock_plus: ^1.2.8
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

@@ -2,7 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'package:provider/provider.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 import '../models/camera_device.dart';
+import '../providers/camera_provider.dart';
+import '../services/onvif_service.dart';
 
 /// Screen for viewing RTSP camera stream
 class StreamViewScreen extends StatefulWidget {
@@ -17,16 +21,21 @@ class StreamViewScreen extends StatefulWidget {
 class _StreamViewScreenState extends State<StreamViewScreen> {
   late final Player _player;
   late final VideoController _controller;
+  late CameraDevice _currentCamera;
   
   bool _showControls = true;
   bool _isBuffering = true;
   bool _hasError = false;
   String _errorMessage = '';
   bool _isPlaying = false;
+  int _connectionAttempts = 0;
+  String _currentRtspPath = '';
 
   @override
   void initState() {
     super.initState();
+    _currentCamera = widget.camera;
+    _currentRtspPath = widget.camera.rtspPath;
     
     // Set landscape orientation for video viewing
     SystemChrome.setPreferredOrientations([
@@ -35,9 +44,21 @@ class _StreamViewScreenState extends State<StreamViewScreen> {
       DeviceOrientation.portraitUp,
     ]);
     
+    // Enable wakelock to keep screen on during streaming
+    WakelockPlus.enable();
+    
     // Initialize media_kit player
     _player = Player();
-    _controller = VideoController(_player);
+    
+    // FIX: Configure VideoController for software rendering compatibility
+    // This fixes "Format allocation info not found" errors on some devices
+    _controller = VideoController(
+      _player,
+      configuration: const VideoControllerConfiguration(
+        enableHardwareAcceleration: false, // Disable hardware acceleration for stability
+        androidAttachSurfaceAfterVideoParameters: true, // Fix for some Android rendering issues
+      ),
+    );
     
     // Listen to player state
     _player.stream.playing.listen((playing) {
@@ -54,6 +75,7 @@ class _StreamViewScreenState extends State<StreamViewScreen> {
     
     _player.stream.error.listen((error) {
       if (mounted && error.isNotEmpty) {
+        print('[Stream] Error: $error');
         setState(() {
           _hasError = true;
           _errorMessage = error;
@@ -66,21 +88,25 @@ class _StreamViewScreenState extends State<StreamViewScreen> {
   }
 
   Future<void> _initializeStream() async {
+    _connectionAttempts++;
+    
     try {
-      final rtspUrl = widget.camera.rtspUrl;
-      print('Opening stream: $rtspUrl');
+      final rtspUrl = _buildRtspUrl(_currentRtspPath);
+      print('[Stream] Attempt #$_connectionAttempts - Opening: $rtspUrl');
+      
+      setState(() {
+        _hasError = false;
+        _isBuffering = true;
+        _errorMessage = '';
+      });
       
       await _player.open(
         Media(rtspUrl),
         play: true,
       );
       
-      setState(() {
-        _hasError = false;
-        _isBuffering = true;
-      });
     } catch (e) {
-      print('Stream error: $e');
+      print('[Stream] Exception: $e');
       setState(() {
         _hasError = true;
         _errorMessage = e.toString();
@@ -88,8 +114,134 @@ class _StreamViewScreenState extends State<StreamViewScreen> {
     }
   }
 
+  String _buildRtspUrl(String path) {
+    final camera = _currentCamera;
+    if (camera.username.isNotEmpty && camera.password.isNotEmpty) {
+      final encodedUser = Uri.encodeComponent(camera.username);
+      final encodedPass = Uri.encodeComponent(camera.password);
+      return 'rtsp://$encodedUser:$encodedPass@${camera.ipAddress}:${camera.port}$path';
+    }
+    return 'rtsp://${camera.ipAddress}:${camera.port}$path';
+  }
+
+  Future<void> _tryPath(String newPath) async {
+    setState(() {
+      _currentRtspPath = newPath;
+      _hasError = false;
+      _isBuffering = true;
+    });
+    
+    // Update camera with new path
+    _currentCamera = _currentCamera.copyWith(rtspPath: newPath);
+    
+    await _player.stop();
+    await _initializeStream();
+  }
+
+  void _showPathSelector() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF141A22),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => _PathSelectorSheet(
+        currentPath: _currentRtspPath,
+        onPathSelected: (path) {
+          Navigator.pop(context);
+          _tryPath(path);
+        },
+        onCustomPath: () {
+          Navigator.pop(context);
+          _showCustomPathDialog();
+        },
+      ),
+    );
+  }
+
+  void _showCustomPathDialog() {
+    final controller = TextEditingController(text: _currentRtspPath);
+    
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF141A22),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Custom RTSP Path', style: TextStyle(color: Colors.white)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Enter the RTSP path for your camera:',
+              style: TextStyle(color: Colors.white.withOpacity(0.7)),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: controller,
+              style: const TextStyle(color: Colors.white, fontFamily: 'monospace'),
+              decoration: InputDecoration(
+                hintText: '/stream1',
+                hintStyle: TextStyle(color: Colors.white.withOpacity(0.3)),
+                prefixIcon: const Icon(Icons.link, color: Color(0xFF00E5FF)),
+                filled: true,
+                fillColor: const Color(0xFF0A0E14),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Full URL: rtsp://${_currentCamera.ipAddress}:${_currentCamera.port}${controller.text}',
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.5),
+                fontSize: 11,
+                fontFamily: 'monospace',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              final path = controller.text.isEmpty ? '/stream1' : controller.text;
+              _tryPath(path.startsWith('/') ? path : '/$path');
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF00E5FF),
+              foregroundColor: Colors.black,
+            ),
+            child: const Text('Try Path'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _saveCurrentPath() {
+    final provider = context.read<CameraProvider>();
+    provider.updateCamera(_currentCamera);
+    
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Saved path: $_currentRtspPath'),
+        backgroundColor: Colors.green,
+      ),
+    );
+  }
+
   @override
   void dispose() {
+    // Disable wakelock when leaving stream view
+    WakelockPlus.disable();
+    
     // Reset orientation
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.portraitUp,
@@ -158,6 +310,15 @@ class _StreamViewScreenState extends State<StreamViewScreen> {
                           fontSize: 14,
                         ),
                       ),
+                      const SizedBox(height: 8),
+                      Text(
+                        _currentRtspPath,
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.5),
+                          fontSize: 11,
+                          fontFamily: 'monospace',
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -179,7 +340,7 @@ class _StreamViewScreenState extends State<StreamViewScreen> {
   }
 
   Widget _buildErrorState() {
-    return Container(
+    return SingleChildScrollView(
       padding: const EdgeInsets.all(32),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -208,47 +369,104 @@ class _StreamViewScreenState extends State<StreamViewScreen> {
           ),
           const SizedBox(height: 12),
           Text(
-            'Unable to connect to the camera stream.\nPlease check your network and camera settings.',
+            'The RTSP path "$_currentRtspPath" might be incorrect for this camera.',
             textAlign: TextAlign.center,
             style: TextStyle(
               color: Colors.white.withOpacity(0.6),
               fontSize: 14,
             ),
           ),
+          const SizedBox(height: 16),
+          
+          // Current URL display
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.05),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Column(
+              children: [
+                Text(
+                  'Tried URL:',
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.5),
+                    fontSize: 11,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'rtsp://${_currentCamera.ipAddress}:${_currentCamera.port}$_currentRtspPath',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.7),
+                    fontSize: 12,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+              ],
+            ),
+          ),
+          
           if (_errorMessage.isNotEmpty) ...[
-            const SizedBox(height: 16),
+            const SizedBox(height: 12),
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.05),
+                color: Colors.red.withOpacity(0.1),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Text(
                 _errorMessage,
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                  color: Colors.white.withOpacity(0.4),
-                  fontSize: 12,
+                  color: Colors.red.withOpacity(0.8),
+                  fontSize: 11,
                   fontFamily: 'monospace',
                 ),
               ),
             ),
           ],
-          const SizedBox(height: 32),
-          ElevatedButton.icon(
-            onPressed: _retry,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF00E5FF),
-              foregroundColor: Colors.black,
-              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
+          
+          const SizedBox(height: 24),
+          
+          // Action buttons
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              OutlinedButton.icon(
+                onPressed: _retry,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.white,
+                  side: const BorderSide(color: Colors.white24),
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                ),
+                icon: const Icon(Icons.refresh_rounded, size: 20),
+                label: const Text('Retry'),
               ),
-            ),
-            icon: const Icon(Icons.refresh_rounded),
-            label: const Text(
-              'Retry',
-              style: TextStyle(fontWeight: FontWeight.bold),
+              const SizedBox(width: 12),
+              ElevatedButton.icon(
+                onPressed: _showPathSelector,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF00E5FF),
+                  foregroundColor: Colors.black,
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                ),
+                icon: const Icon(Icons.route_rounded, size: 20),
+                label: const Text('Try Different Path'),
+              ),
+            ],
+          ),
+          
+          const SizedBox(height: 16),
+          
+          // Back button
+          TextButton.icon(
+            onPressed: () => Navigator.pop(context),
+            icon: const Icon(Icons.arrow_back, size: 18),
+            label: const Text('Go Back'),
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.white.withOpacity(0.6),
             ),
           ),
         ],
@@ -296,7 +514,7 @@ class _StreamViewScreenState extends State<StreamViewScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          widget.camera.name,
+                          _currentCamera.name,
                           style: const TextStyle(
                             color: Colors.white,
                             fontSize: 18,
@@ -304,7 +522,7 @@ class _StreamViewScreenState extends State<StreamViewScreen> {
                           ),
                         ),
                         Text(
-                          widget.camera.ipAddress,
+                          _currentCamera.ipAddress,
                           style: TextStyle(
                             color: Colors.white.withOpacity(0.6),
                             fontSize: 13,
@@ -313,6 +531,17 @@ class _StreamViewScreenState extends State<StreamViewScreen> {
                       ],
                     ),
                   ),
+                  // Settings button
+                  IconButton(
+                    onPressed: _showPathSelector,
+                    icon: const Icon(
+                      Icons.settings_rounded,
+                      color: Colors.white70,
+                      size: 24,
+                    ),
+                    tooltip: 'Change RTSP Path',
+                  ),
+                  const SizedBox(width: 8),
                   // Live badge
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -397,33 +626,42 @@ class _StreamViewScreenState extends State<StreamViewScreen> {
             // Stream info
             Padding(
               padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      Icons.link_rounded,
-                      color: Colors.white.withOpacity(0.6),
-                      size: 16,
-                    ),
-                    const SizedBox(width: 8),
-                    Flexible(
-                      child: Text(
-                        widget.camera.rtspUrlDisplay,
-                        style: TextStyle(
-                          color: Colors.white.withOpacity(0.6),
-                          fontSize: 12,
-                          fontFamily: 'monospace',
-                        ),
-                        overflow: TextOverflow.ellipsis,
+              child: GestureDetector(
+                onTap: _showPathSelector,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        Icons.link_rounded,
+                        color: Colors.white.withOpacity(0.6),
+                        size: 16,
                       ),
-                    ),
-                  ],
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Text(
+                          _currentRtspPath,
+                          style: TextStyle(
+                            color: Colors.white.withOpacity(0.6),
+                            fontSize: 12,
+                            fontFamily: 'monospace',
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Icon(
+                        Icons.edit_rounded,
+                        color: Colors.white.withOpacity(0.4),
+                        size: 14,
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -434,3 +672,207 @@ class _StreamViewScreenState extends State<StreamViewScreen> {
   }
 }
 
+/// Bottom sheet for selecting RTSP path
+class _PathSelectorSheet extends StatelessWidget {
+  final String currentPath;
+  final Function(String) onPathSelected;
+  final VoidCallback onCustomPath;
+
+  const _PathSelectorSheet({
+    required this.currentPath,
+    required this.onPathSelected,
+    required this.onCustomPath,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Handle
+          Center(
+            child: Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.white24,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          const SizedBox(height: 20),
+          
+          // Title
+          const Text(
+            'Select RTSP Path',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Different camera brands use different stream paths. Try these common options:',
+            style: TextStyle(
+              color: Colors.white.withOpacity(0.6),
+              fontSize: 13,
+            ),
+          ),
+          const SizedBox(height: 20),
+          
+          // Path options
+          Flexible(
+            child: SingleChildScrollView(
+              child: Column(
+                children: [
+                  _PathOption(
+                    path: '/stream1',
+                    description: 'Generic / Default',
+                    isSelected: currentPath == '/stream1',
+                    onTap: () => onPathSelected('/stream1'),
+                  ),
+                  _PathOption(
+                    path: '/Streaming/Channels/101',
+                    description: 'Hikvision Main Stream',
+                    isSelected: currentPath == '/Streaming/Channels/101',
+                    onTap: () => onPathSelected('/Streaming/Channels/101'),
+                  ),
+                  _PathOption(
+                    path: '/Streaming/Channels/102',
+                    description: 'Hikvision Sub Stream',
+                    isSelected: currentPath == '/Streaming/Channels/102',
+                    onTap: () => onPathSelected('/Streaming/Channels/102'),
+                  ),
+                  _PathOption(
+                    path: '/cam/realmonitor?channel=1&subtype=0',
+                    description: 'Dahua Main Stream',
+                    isSelected: currentPath == '/cam/realmonitor?channel=1&subtype=0',
+                    onTap: () => onPathSelected('/cam/realmonitor?channel=1&subtype=0'),
+                  ),
+                  _PathOption(
+                    path: '/live/ch0',
+                    description: 'Generic Live',
+                    isSelected: currentPath == '/live/ch0',
+                    onTap: () => onPathSelected('/live/ch0'),
+                  ),
+                  _PathOption(
+                    path: '/h264',
+                    description: 'H.264 Stream',
+                    isSelected: currentPath == '/h264',
+                    onTap: () => onPathSelected('/h264'),
+                  ),
+                  _PathOption(
+                    path: '/axis-media/media.amp',
+                    description: 'Axis Cameras',
+                    isSelected: currentPath == '/axis-media/media.amp',
+                    onTap: () => onPathSelected('/axis-media/media.amp'),
+                  ),
+                  _PathOption(
+                    path: '/onvif1',
+                    description: 'ONVIF Stream 1',
+                    isSelected: currentPath == '/onvif1',
+                    onTap: () => onPathSelected('/onvif1'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          
+          const SizedBox(height: 16),
+          
+          // Custom path button
+          OutlinedButton.icon(
+            onPressed: onCustomPath,
+            style: OutlinedButton.styleFrom(
+              foregroundColor: const Color(0xFF00E5FF),
+              side: const BorderSide(color: Color(0xFF00E5FF)),
+              padding: const EdgeInsets.symmetric(vertical: 14),
+            ),
+            icon: const Icon(Icons.edit_rounded),
+            label: const Text('Enter Custom Path'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PathOption extends StatelessWidget {
+  final String path;
+  final String description;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  const _PathOption({
+    required this.path,
+    required this.description,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Material(
+        color: isSelected 
+            ? const Color(0xFF00E5FF).withOpacity(0.15)
+            : const Color(0xFF0A0E14),
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: isSelected 
+                    ? const Color(0xFF00E5FF)
+                    : Colors.white12,
+              ),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        path,
+                        style: TextStyle(
+                          color: isSelected ? const Color(0xFF00E5FF) : Colors.white,
+                          fontSize: 13,
+                          fontFamily: 'monospace',
+                          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        description,
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.5),
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (isSelected)
+                  const Icon(
+                    Icons.check_circle_rounded,
+                    color: Color(0xFF00E5FF),
+                    size: 20,
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
